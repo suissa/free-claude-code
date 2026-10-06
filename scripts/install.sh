@@ -92,6 +92,42 @@ prompt_yes_no() {
     done
 }
 
+# Função auxiliar para executar o instalador e tratar o erro de reinstalação
+run_opencode_installer() {
+    local install_output
+    
+    # Captura a saída de stdout e stderr para validar se deu o erro do "Uninstall it first"
+    install_output=$(download_and_run "$OPENCODE_INSTALL_URL" bash "OpenCode" 2>&1)
+    local exit_code=$?
+
+    if [ $exit_code -ne 0 ]; then
+        if echo "$install_output" | grep -q "Uninstall it first"; then
+            printf '\033[1;33m⚠️  Detectado conflito com instalação existente ("Uninstall it first").\033[0m\n'
+            printf '\033[1;32m🔄 Executando desinstalação automática...\033[0m\n'
+
+            # 1. Tenta desinstalar via npm/bun
+            if command -v bun >/dev/null 2>&1; then
+                bun remove -g opencode-ai 2>/dev/null || bun remove -g pi 2>/dev/null || true
+            fi
+            npm uninstall -g opencode-ai 2>/dev/null || npm uninstall -g pi 2>/dev/null || true
+
+            # 2. Força a remoção manual do binário em ~/.bun/bin/pi ou ~/.bun/bin/opencode caso continue lá
+            rm -f "$HOME/.bun/bin/pi" "$HOME/.bun/bin/opencode" 2>/dev/null || true
+            hash -r 2>/dev/null || true
+
+            printf '\033[1;32m✅ Instalação antiga limpa. Tentando reinstalar novamente...\033[0m\n'
+
+            # 3. Tenta rodar a instalação mais uma vez após a limpeza
+            download_and_run "$OPENCODE_INSTALL_URL" bash "OpenCode" || fail "A reinstalação do OpenCode/Pi falhou mesmo após a remoção prévia."
+        else
+            echo "$install_output"
+            fail "OpenCode installation failed."
+        fi
+    else
+        echo "$install_output"
+    fi
+}
+
 find_installed_coding_agent() (
     # Lookup may prepare search paths, but must not change the installer's state.
     case "$1" in
