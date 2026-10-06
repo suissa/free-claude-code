@@ -779,6 +779,73 @@ run_opencode_installer() {
     VERSION= bash "$@"
 }
 
+# ensure_opencode() {
+#     [ -n "${HOME:-}" ] || fail "HOME is required to install OpenCode."
+#     opencode_native="$HOME/.opencode/bin/opencode"
+#     opencode_path=${original_opencode_path:-$(command -v opencode || true)}
+#     if [ "$dry_run" -eq 1 ]; then
+#         print_command opencode --version
+#         printf 'Install stable OpenCode 2 if absent, or migrate v1 at %s; external v1 requires manual upgrade.\n' "$opencode_native"
+#         printf 'Check and back up the recognized old OpenCode RTK plugin if present.\n'
+#         if [ -z "$opencode_path" ]; then
+#             download_and_run "$OPENCODE_INSTALL_URL" bash "OpenCode"
+#         fi
+#         return 0
+#     fi
+
+#     opencode_install=1
+#     if [ -n "$opencode_path" ]; then
+#         opencode_current=$(opencode_version "$opencode_path") ||
+#             fail "Could not read OpenCode version at $opencode_path. Correct that installation, then rerun the installer."
+#         case "$opencode_current" in
+#             2.*) opencode_install=0 ;;
+#             1.*)
+#                 [ "$opencode_path" = "$opencode_native" ] ||
+#                     fail "OpenCode 1 at $opencode_path requires manual migration. Remove it with its package manager (npm: npm uninstall -g opencode-ai), then rerun this installer. See https://opencode.ai/v2/docs/migrate-v1/"
+#                 ;;
+#             *) fail "OpenCode at $opencode_path is not a recognized stable v1 or v2. Correct that installation, then rerun the installer. See https://opencode.ai/v2/docs/migrate-v1/" ;;
+#         esac
+#     fi
+#     opencode_plugin=$(opencode_rtk_plugin) || return $?
+#     if [ "$opencode_install" -eq 1 ] || [ -n "$opencode_plugin" ]; then
+#         assert_no_opencode_processes_running
+#     fi
+#     if [ "$opencode_install" -eq 1 ]; then
+#         for opencode_target in "$HOME/.opencode" "$HOME/.opencode/bin" "$opencode_native"; do
+#             [ ! -L "$opencode_target" ] || fail "OpenCode installation path is linked: $opencode_target. Migrate it manually."
+#         done
+#         download_and_run "$OPENCODE_INSTALL_URL" run_opencode_installer "OpenCode"
+#         add_known_bin_directories
+#         hash -r 2>/dev/null || true
+#         opencode_installed=$(opencode_version "$opencode_native") || fail "Could not verify installed OpenCode at $opencode_native."
+#         case "$opencode_installed" in
+#             2.*) ;;
+#             *) fail "The OpenCode installer did not install stable OpenCode 2. See https://opencode.ai/v2/docs/" ;;
+#         esac
+#     fi
+#     # Check the command selected after the installer's PATH additions.
+#     hash -r 2>/dev/null || true
+#     opencode_path=$(command -v opencode || true)
+#     [ -n "$opencode_path" ] || fail "OpenCode is not available on PATH after installation."
+#     opencode_current=$(opencode_version "$opencode_path") || fail "Could not verify OpenCode at $opencode_path."
+#     case "$opencode_current" in
+#         2.*) printf 'Verified OpenCode %s at %s.\n' "$opencode_current" "$opencode_path" ;;
+#         *) fail "OpenCode at $opencode_path is not stable OpenCode 2. Correct PATH, then rerun the installer." ;;
+#     esac
+#     if [ -n "$opencode_plugin" ]; then
+#         opencode_plugin=$(opencode_rtk_plugin) || return $?
+#         [ -n "$opencode_plugin" ] || return 0
+#         assert_no_opencode_processes_running
+#         opencode_backup=$(mktemp "$HOME/.config/opencode/rtk-v1-XXXXXX") || fail "Could not create an RTK plugin backup."
+#         if mv "$opencode_plugin" "$opencode_backup"; then
+#             printf 'OpenCode 2 RTK support is unavailable; the old plugin was saved at %s.\n' "$opencode_backup"
+#         else
+#             rm -f "$opencode_backup"
+#             fail "Could not disable the old RTK plugin at $opencode_plugin."
+#         fi
+#     fi
+# }
+
 ensure_opencode() {
     [ -n "${HOME:-}" ] || fail "HOME is required to install OpenCode."
     opencode_native="$HOME/.opencode/bin/opencode"
@@ -800,8 +867,36 @@ ensure_opencode() {
         case "$opencode_current" in
             2.*) opencode_install=0 ;;
             1.*)
-                [ "$opencode_path" = "$opencode_native" ] ||
-                    fail "OpenCode 1 at $opencode_path requires manual migration. Remove it with its package manager (npm: npm uninstall -g opencode-ai), then rerun this installer. See https://opencode.ai/v2/docs/migrate-v1/"
+                if [ "$opencode_path" != "$opencode_native" ]; then
+                    # Monta a mensagem de erro esperada
+                    err_msg="OpenCode 1 at $opencode_path requires manual migration. Remove it with its package manager (npm: npm uninstall -g opencode-ai), then rerun this installer."
+                    
+                    printf '\033[1;33m⚠️  %s\033[0m\n' "$err_msg"
+
+                    # Extrai a string após "npm: " até o parenteses ")"
+                    # Exemplo extraído: npm uninstall -g opencode-ai
+                    uninstall_cmd=$(echo "$err_msg" | grep -oE 'npm: [^)]+' | sed 's/npm: //')
+
+                    if [ -n "$uninstall_cmd" ]; then
+                        # Se o executável estiver dentro do .bun, tenta remover via bun ou com a string extraída
+                        if [[ "$opencode_path" == *".bun"* ]] && command -v bun >/dev/null 2>&1; then
+                            printf '\033[1;32m🔄 Removendo instalação v1 via Bun: bun remove -g opencode-ai\033[0m\n'
+                            bun remove -g opencode-ai || true
+                        else
+                            printf '\033[1;32m🔄 Executando comando extraído: %s\033[0m\n' "$uninstall_cmd"
+                            eval "$uninstall_cmd" || true
+                        fi
+
+                        # Remove qualquer binário remanescente do caminho antigo
+                        rm -f "$opencode_path" 2>/dev/null || true
+                        hash -r 2>/dev/null || true
+                        
+                        printf '\033[1;32m✅ OpenCode 1 antigo removido com sucesso. Continuando a instalação...\033[0m\n'
+                        opencode_install=1
+                    else
+                        fail "Não foi possível extrair o comando de desinstalação."
+                    fi
+                fi
                 ;;
             *) fail "OpenCode at $opencode_path is not a recognized stable v1 or v2. Correct that installation, then rerun the installer. See https://opencode.ai/v2/docs/migrate-v1/" ;;
         esac
